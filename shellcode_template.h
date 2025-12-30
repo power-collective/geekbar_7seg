@@ -14,7 +14,22 @@
 
 // RCC (Reset and Clock Control)
 #define RCC_BASE        0x40021000U
-#define RCC_IOPENR      (RCC_BASE + 0x34)
+#define RCC_CR          (RCC_BASE + 0x00)  // Clock control register
+#define RCC_ICSCR       (RCC_BASE + 0x04)  // Internal clock sources calibration
+#define RCC_CFGR        (RCC_BASE + 0x08)  // Clock configuration register
+#define RCC_IOPENR      (RCC_BASE + 0x34)  // GPIO clock enable
+
+// RCC_CR bits
+#define RCC_CR_HSION    (1 << 8)   // HSI clock enable
+#define RCC_CR_HSIRDY   (1 << 10)  // HSI clock ready flag
+
+// FLASH
+#define FLASH_BASE      0x40022000U
+#define FLASH_ACR       (FLASH_BASE + 0x00)  // Access control register
+
+// FLASH_ACR bits (wait states)
+#define FLASH_ACR_LATENCY_0  0x00  // 0 wait states (up to 24 MHz)
+#define FLASH_ACR_LATENCY_1  0x01  // 1 wait state (24-48 MHz)
 
 // GPIO Bases (IOPORT region at 0x50000000)
 #define GPIOA_BASE      0x50000000U

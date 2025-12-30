@@ -27,6 +27,22 @@
 #define ITERATIONS_PER_MS   (SYSCLK_HZ / 1000 / 4)
 
 // =============================================================================
+// System Initialization
+// =============================================================================
+
+static inline void system_init(void) __attribute__((always_inline));
+static inline void system_init(void) {
+    // Enable HSI (24 MHz internal oscillator)
+    REG32(RCC_CR) |= RCC_CR_HSION;
+
+    // Wait for HSI ready
+    while (!(REG32(RCC_CR) & RCC_CR_HSIRDY));
+
+    // Set Flash latency to 0 wait states (safe for 24 MHz)
+    REG32(FLASH_ACR) = FLASH_ACR_LATENCY_0;
+}
+
+// =============================================================================
 // Watchdog Functions
 // =============================================================================
 
@@ -85,6 +101,9 @@ static inline void delay_ms(uint32_t ms) {
 
 __attribute__((naked, noreturn, section(".text.entry")))
 void shellcode_entry(void) {
+
+    // Initialize system clocks (HSI @ 24 MHz)
+    system_init();
 
     // Initialize watchdog to maximum timeout (~26 seconds)
     iwdg_init_max_timeout();
