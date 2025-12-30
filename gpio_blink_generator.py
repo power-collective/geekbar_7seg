@@ -504,10 +504,10 @@ def inject_and_run_blink(mcu, shellcode: bytes, ram_address: int = 0x20000A00):
 
     # Write shellcode
     print(f"[2] Writing {len(shellcode)} bytes to 0x{ram_address:08X}...")
-    mcu.write(ram_address, shellcode)
+    mcu.rsp.store(shellcode, ram_address)
 
     # Verify
-    verify = mcu.read(ram_address, len(shellcode))
+    verify = mcu.dump_memory(ram_address, len(shellcode))
     if verify == shellcode:
         print(f"    ✓ Shellcode written and verified")
     else:
