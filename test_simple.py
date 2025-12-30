@@ -19,7 +19,7 @@ print("\nConnecting to MCU...")
 with PY32F003(verbose=True) as mcu:
     mcu.prepare_for_interactive_debug(reset_first=True)
     inject_and_run_blink(mcu, shellcode)
-
+    mcu.resume()
     print("\n✓ Shellcode injected and running!")
     print("Watch PA4 blink 3 times, then PA5 should go low")
     print("MCU will reset after ~16 seconds")

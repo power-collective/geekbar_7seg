@@ -102,8 +102,8 @@ static inline void delay_ms(uint32_t ms) {
 __attribute__((naked, noreturn, section(".text.entry")))
 void shellcode_entry(void) {
 
-    // Initialize system clocks (HSI @ 24 MHz)
-    system_init();
+    // Skip system init - assume firmware already configured clocks
+    // system_init();
 
     // Initialize watchdog to maximum timeout (~26 seconds)
     iwdg_init_max_timeout();
