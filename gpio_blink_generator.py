@@ -169,6 +169,13 @@ static inline void delay_ms(uint32_t ms) {{
 // Main shellcode entry point
 __attribute__((naked, noreturn, section(".text.entry")))
 void shellcode_entry(void) {{
+    // Initialize stack pointer to top of SRAM (8KB at 0x20000000)
+    __asm__ volatile (
+        "ldr r0, =0x20002000\\n"
+        "mov sp, r0\\n"
+        ::: "r0"
+    );
+
     // Enable GPIO clocks
     uint32_t rcc_iopenr = REG32(RCC_IOPENR);
     rcc_iopenr |= (1U << {blink_clock_bit});  // Enable GPIO{blink_port}
