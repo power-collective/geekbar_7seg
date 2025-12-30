@@ -1,0 +1,33 @@
+# Build artifacts
+build/
+*.elf
+*.bin
+*.o
+*.a
+*.so
+*.dylib
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+*.egg
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+*.tmp
+tmp/
+temp/
+
+# Generated C code (optional - uncomment if you don't want to track)
+# shellcode.c
+# shellcode.ld
