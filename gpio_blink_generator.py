@@ -95,7 +95,7 @@ def generate_c_code(blink_port: str, blink_pin: int,
                    num_blinks: int,
                    sysclk_hz: int = DEFAULT_SYSCLK_HZ) -> str:
     """
-    Generate C code for GPIO blinking shellcode
+    Generate C code for GPIO blinking shellcode from template
 
     Args:
         blink_port: Port letter for blinking pin ('A', 'B', etc.)
@@ -116,120 +116,20 @@ def generate_c_code(blink_port: str, blink_pin: int,
     blink_clock_bit = ord(blink_port) - ord('A')
     final_clock_bit = ord(final_port) - ord('A')
 
-    # Calculate delay loop iterations for timing
-    # Rough estimate: 4 cycles per loop iteration at -O2
-    cycles_per_ms = sysclk_hz // 1000
-    iterations_per_ms = cycles_per_ms // 4
+    # Read template file
+    template_path = Path(__file__).parent / "shellcode_template.c"
+    with open(template_path, 'r') as f:
+        template = f.read()
 
-    c_code = f"""
-/*
- * Auto-generated GPIO Blink Shellcode
- *
- * Blink: P{blink_port}{blink_pin}
- * Final: P{final_port}{final_pin}
- * Blinks: {num_blinks}
- */
-
-#include <stdint.h>
-
-// Hardware register addresses
-#define RCC_BASE        0x{RCC_BASE:08X}U
-#define RCC_IOPENR      (RCC_BASE + 0x34)
-
-#define GPIO{blink_port}_BASE     0x{blink_gpio_base:08X}U
-#define GPIO{final_port}_BASE     0x{final_gpio_base:08X}U
-
-#define SCB_AIRCR       0x{SCB_AIRCR:08X}U
-
-// GPIO register offsets
-#define GPIO_MODER_OFFSET   0x00
-#define GPIO_ODR_OFFSET     0x14
-#define GPIO_BSRR_OFFSET    0x18
-
-// Pin definitions
-#define BLINK_PIN       {blink_pin}
-#define FINAL_PIN       {final_pin}
-#define NUM_BLINKS      {num_blinks}
-
-// Timing (iterations for delay loops)
-#define ITERATIONS_PER_MS    {iterations_per_ms}
-
-// Register access macros
-#define REG32(addr) (*(volatile uint32_t*)(addr))
-
-// Delay function (busy loop)
-static inline void delay_ms(uint32_t ms) __attribute__((always_inline));
-static inline void delay_ms(uint32_t ms) {{
-    volatile uint32_t count = ms * ITERATIONS_PER_MS;
-    while (count--) {{
-        __asm__ volatile ("nop");
-    }}
-}}
-
-// Main shellcode entry point
-__attribute__((naked, noreturn, section(".text.entry")))
-void shellcode_entry(void) {{
-    // Initialize stack pointer to top of SRAM (8KB at 0x20000000)
-    __asm__ volatile (
-        "ldr r0, =0x20002000\\n"
-        "mov sp, r0\\n"
-        ::: "r0"
-    );
-
-    // Enable GPIO clocks
-    uint32_t rcc_iopenr = REG32(RCC_IOPENR);
-    rcc_iopenr |= (1U << {blink_clock_bit});  // Enable GPIO{blink_port}
-    rcc_iopenr |= (1U << {final_clock_bit});  // Enable GPIO{final_port}
-    REG32(RCC_IOPENR) = rcc_iopenr;
-
-    // Small delay for clock to stabilize
-    delay_ms(1);
-
-    // Configure blink pin as output (MODER = 01 for output)
-    volatile uint32_t *blink_moder = (volatile uint32_t*)(GPIO{blink_port}_BASE + GPIO_MODER_OFFSET);
-    uint32_t moder_val = *blink_moder;
-    moder_val &= ~(3U << (BLINK_PIN * 2));  // Clear mode bits
-    moder_val |= (1U << (BLINK_PIN * 2));   // Set as output
-    *blink_moder = moder_val;
-
-    // Configure final pin as output
-    volatile uint32_t *final_moder = (volatile uint32_t*)(GPIO{final_port}_BASE + GPIO_MODER_OFFSET);
-    moder_val = *final_moder;
-    moder_val &= ~(3U << (FINAL_PIN * 2));  // Clear mode bits
-    moder_val |= (1U << (FINAL_PIN * 2));   // Set as output
-    *final_moder = moder_val;
-
-    // BSRR register for atomic bit set/reset
-    volatile uint32_t *blink_bsrr = (volatile uint32_t*)(GPIO{blink_port}_BASE + GPIO_BSRR_OFFSET);
-    volatile uint32_t *final_bsrr = (volatile uint32_t*)(GPIO{final_port}_BASE + GPIO_BSRR_OFFSET);
-
-    // Blink loop
-    for (int i = 0; i < NUM_BLINKS; i++) {{
-        // Set pin high (BS - bit set)
-        *blink_bsrr = (1U << BLINK_PIN);
-        delay_ms(500);  // 0.5 second on
-
-        // Set pin low (BR - bit reset, upper 16 bits)
-        *blink_bsrr = (1U << (BLINK_PIN + 16));
-        delay_ms(500);  // 0.5 second off
-    }}
-
-    // Set final pin low
-    *final_bsrr = (1U << (FINAL_PIN + 16));
-
-    // Wait 10 seconds
-    delay_ms(10000);
-
-    // Software reset via NVIC
-    // AIRCR key (0x05FA) + SYSRESETREQ bit
-    REG32(SCB_AIRCR) = 0x05FA0004;
-
-    // Should never reach here, but infinite loop just in case
-    while (1) {{
-        __asm__ volatile ("nop");
-    }}
-}}
-"""
+    # Replace placeholders
+    c_code = template.replace('{{BLINK_GPIO_BASE}}', f'0x{blink_gpio_base:08X}U')
+    c_code = c_code.replace('{{FINAL_GPIO_BASE}}', f'0x{final_gpio_base:08X}U')
+    c_code = c_code.replace('{{BLINK_PIN}}', str(blink_pin))
+    c_code = c_code.replace('{{FINAL_PIN}}', str(final_pin))
+    c_code = c_code.replace('{{BLINK_CLOCK_BIT}}', str(blink_clock_bit))
+    c_code = c_code.replace('{{FINAL_CLOCK_BIT}}', str(final_clock_bit))
+    c_code = c_code.replace('{{NUM_BLINKS}}', str(num_blinks))
+    c_code = c_code.replace('{{SYSCLK_HZ}}', str(sysclk_hz))
 
     return c_code
 
@@ -323,12 +223,18 @@ def compile_shellcode(c_code: str, linker_script: str,
 
         # Write source files
         c_file = tmpdir_path / "shellcode.c"
+        h_file = tmpdir_path / "shellcode_template.h"
         ld_file = tmpdir_path / "shellcode.ld"
         elf_file = tmpdir_path / "shellcode.elf"
         bin_file = tmpdir_path / "shellcode.bin"
 
         c_file.write_text(c_code)
         ld_file.write_text(linker_script)
+
+        # Copy header file to temp directory
+        header_src = Path(__file__).parent / "shellcode_template.h"
+        import shutil
+        shutil.copy(header_src, h_file)
 
         # Compile
         compile_cmd = [
@@ -384,6 +290,7 @@ def compile_shellcode(c_code: str, linker_script: str,
             import shutil
             shutil.copy(elf_file, output_path / "shellcode.elf")
             shutil.copy(bin_file, output_path / "shellcode.bin")
+            shutil.copy(h_file, output_path / "shellcode_template.h")
             (output_path / "shellcode.c").write_text(c_code)
             (output_path / "shellcode.ld").write_text(linker_script)
 
@@ -509,8 +416,28 @@ def inject_and_run_blink(mcu, shellcode: bytes, ram_address: int = 0x20000A00):
     print("    ✓ CPU halted")
     print()
 
+    # Initialize watchdog to maximum timeout (~26 seconds)
+    print("[2] Initializing watchdog to maximum timeout...")
+    IWDG_KR = 0x40003000
+    IWDG_PR = 0x40003004
+    IWDG_RLR = 0x40003008
+    IWDG_SR = 0x4000300C
+
+    # Enable write access
+    mcu.write_u32(IWDG_KR, 0x5555)
+    # Set prescaler to 256 (maximum)
+    mcu.write_u32(IWDG_PR, 0x06)
+    # Set reload to 4095 (maximum)
+    mcu.write_u32(IWDG_RLR, 0xFFF)
+    # Reload counter
+    mcu.write_u32(IWDG_KR, 0xAAAA)
+    # Enable watchdog
+    mcu.write_u32(IWDG_KR, 0xCCCC)
+    print("    ✓ Watchdog configured for ~26 second timeout")
+    print()
+
     # Write shellcode
-    print(f"[2] Writing {len(shellcode)} bytes to 0x{ram_address:08X}...")
+    print(f"[3] Writing {len(shellcode)} bytes to 0x{ram_address:08X}...")
     mcu.rsp.store(shellcode, ram_address)
 
     # Verify
@@ -523,7 +450,7 @@ def inject_and_run_blink(mcu, shellcode: bytes, ram_address: int = 0x20000A00):
     print()
 
     # Set PC (must have bit 0 set for Thumb mode)
-    print("[3] Setting PC to shellcode entry...")
+    print("[4] Setting PC to shellcode entry...")
     pc_thumb = ram_address | 0x01
 
     # Read all registers
@@ -541,7 +468,7 @@ def inject_and_run_blink(mcu, shellcode: bytes, ram_address: int = 0x20000A00):
     print()
 
     # Resume
-    print("[4] Resuming CPU...")
+    print("[5] Resuming CPU...")
     mcu.resume()
     print("    ✓ Shellcode is now executing!")
     print()
