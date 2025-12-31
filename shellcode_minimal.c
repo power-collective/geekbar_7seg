@@ -27,6 +27,15 @@
 #define ITERATIONS_PER_MS   (SYSCLK_HZ / 1000 / 4)
 
 // =============================================================================
+// Watchdog Functions
+// =============================================================================
+
+static inline void iwdg_kick(void) __attribute__((always_inline));
+static inline void iwdg_kick(void) {
+    REG32(IWDG_KR) = IWDG_KEY_RELOAD;  // 0xAAAA
+}
+
+// =============================================================================
 // Delay Function
 // =============================================================================
 
@@ -35,6 +44,11 @@ static inline void delay_ms(uint32_t ms) {
     volatile uint32_t count = ms * ITERATIONS_PER_MS;
     while (count--) {
         __asm__ volatile ("nop");
+
+        // Kick watchdog every ~1024 iterations to prevent reset
+        if ((count & 0x3FF) == 0) {
+            iwdg_kick();
+        }
     }
 }
 
@@ -81,6 +95,9 @@ void shellcode_entry(void) {
         // Set pin low (BR - bit reset, upper 16 bits)
         *blink_bsrr = (1U << (BLINK_PIN + 16));
         delay_ms(500);  // 0.5 second off
+
+        // Kick watchdog between blinks
+        iwdg_kick();
     }
 
     // Set final pin high
