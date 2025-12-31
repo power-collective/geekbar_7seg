@@ -1,8 +1,10 @@
 /*
- * GPIO Blink Shellcode Template
+ * GPIO Blink Shellcode Template - FULL VERSION (NOT WORKING)
  *
- * This file is a template that will be customized by the Python generator
- * with specific GPIO pins, blink counts, and timing parameters.
+ * NOTE: This version has issues with clock initialization causing infinite loops.
+ * USE shellcode_minimal.c INSTEAD - it is confirmed working on hardware.
+ *
+ * This file is kept for reference and future development.
  */
 
 #include "shellcode_template.h"

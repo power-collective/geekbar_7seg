@@ -5,7 +5,7 @@ from gpio_blink_generator import inject_and_run_blink
 from pyrsp_py32f003 import PY32F003
 
 # Use pre-generated shellcode
-with open('./build/manual_test/shellcode.bin', 'rb') as f:
+with open('./build/minimal/shellcode.bin', 'rb') as f:
     shellcode = f.read()
 
 print(f"Loaded {len(shellcode)} bytes of shellcode")

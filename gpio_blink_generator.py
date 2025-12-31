@@ -116,7 +116,8 @@ def generate_c_code(blink_port: str, blink_pin: int,
     blink_clock_bit = ord(blink_port) - ord('A')
     final_clock_bit = ord(final_port) - ord('A')
 
-    # Read minimal template file (back to basics - what was working)
+    # Read minimal template file (CONFIRMED WORKING on hardware)
+    # NOTE: shellcode_template.c has issues and should not be used
     template_path = Path(__file__).parent / "shellcode_minimal.c"
     with open(template_path, 'r') as f:
         template = f.read()
