@@ -336,9 +336,67 @@ class PY32F003:
         # Register this connection for automatic cleanup on interpreter exit
         _active_connections.add(self)
 
+    def _verify_gdb_device(self, device_path):
+        """
+        Verify that a device responds to GDB remote serial protocol
+
+        Args:
+            device_path: Path to device to test
+
+        Returns:
+            bool: True if device responds to GDB commands, False otherwise
+        """
+        # Method 1: Try simple serial test first
+        try:
+            import serial
+            ser = serial.Serial(device_path, 115200, timeout=0.5)
+
+            # Clear any pending data
+            ser.reset_input_buffer()
+
+            # Try simplest GDB command: '?' (query halt reason)
+            # Checksum calculation: sum('?') & 0xFF = 0x3F
+            ser.write(b'$?#3f')
+            ser.flush()
+            time.sleep(0.1)
+
+            response = ser.read(200)
+            ser.close()
+
+            if self.verbose and response:
+                print(f"    Response ({len(response)} bytes): {response[:60]}")
+
+            # Check for valid GDB response patterns
+            # BMP typically responds with: +$T05...#XX or similar
+            if len(response) > 2 and (b'$T' in response or b'$S' in response or
+                                       b'+$' in response or response.startswith(b'$')):
+                return True
+
+        except Exception as e:
+            if self.verbose:
+                print(f"    Serial test failed: {e}")
+
+        # Method 2: Try actual pyrsp connection (slower but most reliable)
+        try:
+            if self.verbose:
+                print(f"    Trying full connection test...")
+
+            # Try to actually connect - this is the most reliable test
+            test_rsp = CortexM3(device_path, elffile=None, verbose=False)
+            test_rsp.close()
+
+            if self.verbose:
+                print(f"    Full connection succeeded!")
+            return True
+
+        except Exception as e:
+            if self.verbose:
+                print(f"    Connection test failed: {e}")
+            return False
+
     def _detect_device(self, device):
         """
-        Auto-detect Black Magic Probe device
+        Auto-detect Black Magic Probe device by verifying GDB response
 
         Args:
             device: Device path, glob pattern, or None
@@ -354,24 +412,48 @@ class PY32F003:
                 '/dev/ttyBmpGdb',        # Linux with udev rule
             ]
             for pattern in patterns:
-                devices = _glob.glob(pattern)
-                if devices:
-                    device = devices[0]
+                devices = sorted(_glob.glob(pattern))
+                if self.verbose and devices:
+                    print(f"Found {len(devices)} device(s) matching {pattern}")
+
+                # Try each device until we find one that responds to GDB
+                for dev in devices:
                     if self.verbose:
-                        print(f"Auto-detected device: {device}")
-                    return device
+                        print(f"  Trying {dev}...")
+                    if self._verify_gdb_device(dev):
+                        if self.verbose:
+                            print(f"  ✓ Verified GDB device: {dev}")
+                        return dev
+
             raise RuntimeError(
                 "No Black Magic Probe found. Please specify device path.\n"
                 "Common paths: /dev/cu.usbmodem* (macOS), /dev/ttyACM* (Linux)"
             )
         elif '*' in device or '?' in device:
-            # User provided glob pattern
-            devices = _glob.glob(device)
+            # User provided glob pattern - verify each match
+            devices = sorted(_glob.glob(device))
             if not devices:
                 raise RuntimeError(f"No device found matching pattern: {device}")
-            device = devices[0]
+
             if self.verbose:
-                print(f"Found device: {device}")
+                print(f"Found {len(devices)} device(s) matching {device}")
+
+            # Try each device until we find one that responds to GDB
+            for dev in devices:
+                if self.verbose:
+                    print(f"  Trying {dev}...")
+                if self._verify_gdb_device(dev):
+                    if self.verbose:
+                        print(f"  ✓ Verified GDB device: {dev}")
+                    return dev
+
+            raise RuntimeError(f"Found devices matching {device}, but none responded to GDB")
+
+        # Specific device path provided - verify it
+        if self.verbose:
+            print(f"Verifying device: {device}")
+        if not self._verify_gdb_device(device):
+            raise RuntimeError(f"Device {device} does not respond to GDB commands")
 
         return device
 
