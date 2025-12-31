@@ -410,14 +410,22 @@ def inject_and_run_blink(mcu, shellcode: bytes, ram_address: int = 0x20000A00):
     print("="*70)
     print()
 
+    # Reset to known state first
+    print("[1] Resetting MCU to known state...")
+    mcu.reset(halt_immediately=False)
+    import time
+    time.sleep(0.05)
+    print("    ✓ MCU reset")
+    print()
+
     # Halt CPU
-    print("[1] Halting CPU...")
+    print("[2] Halting CPU...")
     mcu.halt()
     print("    ✓ CPU halted")
     print()
 
     # Write shellcode
-    print(f"[2] Writing {len(shellcode)} bytes to 0x{ram_address:08X}...")
+    print(f"[3] Writing {len(shellcode)} bytes to 0x{ram_address:08X}...")
     mcu.rsp.store(shellcode, ram_address)
 
     # Verify
@@ -430,7 +438,7 @@ def inject_and_run_blink(mcu, shellcode: bytes, ram_address: int = 0x20000A00):
     print()
 
     # Set PC (must have bit 0 set for Thumb mode)
-    print("[3] Setting PC to shellcode entry...")
+    print("[4] Setting PC to shellcode entry...")
     pc_thumb = ram_address | 0x01
 
     # Read all registers
@@ -448,7 +456,7 @@ def inject_and_run_blink(mcu, shellcode: bytes, ram_address: int = 0x20000A00):
     print()
 
     # Resume
-    print("[4] Resuming CPU...")
+    print("[5] Resuming CPU...")
     mcu.resume()
     print("    ✓ Shellcode is now executing!")
     print()
