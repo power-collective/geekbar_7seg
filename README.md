@@ -112,9 +112,9 @@ arm-none-eabi-objcopy -O binary shellcode.elf shellcode.bin
 Writes shellcode to RAM and sets PC:
 
 ```python
-mcu.write(0x20000A00, shellcode)  # Write to RAM
-mcu.set_pc(0x20000A01)             # Set PC (Thumb mode)
-mcu.resume()                        # Execute
+mcu.rsp.store(shellcode, 0x20000A00)  # Write to RAM
+# Set PC via register manipulation (see inject_and_run_blink)
+mcu.resume()                           # Execute
 ```
 
 ## Parameters
