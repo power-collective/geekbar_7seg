@@ -1,8 +1,8 @@
 /*
- * GPIO Blink Shellcode Template
+ * Minimal GPIO Blink Shellcode - Back to Basics
  *
- * This file is a template that will be customized by the Python generator
- * with specific GPIO pins, blink counts, and timing parameters.
+ * This is the minimal version that was confirmed working (blinking LEDs)
+ * No watchdog, no clock init, no stack init - just GPIO control
  */
 
 #include "shellcode_template.h"
@@ -27,58 +27,6 @@
 #define ITERATIONS_PER_MS   (SYSCLK_HZ / 1000 / 4)
 
 // =============================================================================
-// System Initialization
-// =============================================================================
-
-static inline void system_init(void) __attribute__((always_inline));
-static inline void system_init(void) {
-    // Enable HSI (24 MHz internal oscillator)
-    REG32(RCC_CR) |= RCC_CR_HSION;
-
-    // Wait for HSI ready
-    while (!(REG32(RCC_CR) & RCC_CR_HSIRDY));
-
-    // Set Flash latency to 0 wait states (safe for 24 MHz)
-    REG32(FLASH_ACR) = FLASH_ACR_LATENCY_0;
-}
-
-// =============================================================================
-// Watchdog Functions
-// =============================================================================
-
-static inline void iwdg_init_max_timeout(void) __attribute__((always_inline));
-static inline void iwdg_init_max_timeout(void) {
-    // Enable write access to IWDG registers
-    REG32(IWDG_KR) = IWDG_KEY_WRITE;
-
-    // Wait for write access
-    while (REG32(IWDG_SR) & 0x01);  // Wait for PVU bit clear
-
-    // Set maximum prescaler (divide by 256)
-    REG32(IWDG_PR) = IWDG_PRESCALER_256;
-
-    // Wait for prescaler update
-    while (REG32(IWDG_SR) & 0x01);
-
-    // Set maximum reload value (0xFFF = 4095)
-    REG32(IWDG_RLR) = 0xFFF;
-
-    // Wait for reload update
-    while (REG32(IWDG_SR) & 0x02);  // Wait for RVU bit clear
-
-    // Reload counter
-    REG32(IWDG_KR) = IWDG_KEY_RELOAD;
-
-    // Enable watchdog if not already enabled
-    REG32(IWDG_KR) = IWDG_KEY_ENABLE;
-}
-
-static inline void iwdg_kick(void) __attribute__((always_inline));
-static inline void iwdg_kick(void) {
-    REG32(IWDG_KR) = IWDG_KEY_RELOAD;
-}
-
-// =============================================================================
 // Delay Function
 // =============================================================================
 
@@ -87,11 +35,6 @@ static inline void delay_ms(uint32_t ms) {
     volatile uint32_t count = ms * ITERATIONS_PER_MS;
     while (count--) {
         __asm__ volatile ("nop");
-
-        // Kick watchdog every ~1000 iterations (~1ms at 24MHz)
-        if ((count & 0x3FF) == 0) {
-            iwdg_kick();
-        }
     }
 }
 
@@ -102,9 +45,11 @@ static inline void delay_ms(uint32_t ms) {
 __attribute__((naked, noreturn, section(".text.entry")))
 void shellcode_entry(void) {
 
-    // Skip system init - assume firmware already configured clocks
-    // system_init();
-
+    // Enable GPIO clocks
+    uint32_t rcc_iopenr = REG32(RCC_IOPENR);
+    rcc_iopenr |= (1U << BLINK_CLOCK_BIT);  // Enable blink GPIO clock
+    rcc_iopenr |= (1U << FINAL_CLOCK_BIT);  // Enable final GPIO clock
+    REG32(RCC_IOPENR) = rcc_iopenr;
 
     // Small delay for clock to stabilize
     delay_ms(1);
@@ -136,15 +81,12 @@ void shellcode_entry(void) {
         // Set pin low (BR - bit reset, upper 16 bits)
         *blink_bsrr = (1U << (BLINK_PIN + 16));
         delay_ms(500);  // 0.5 second off
-
-        // Kick watchdog between blinks
-        iwdg_kick();
     }
 
     // Set final pin high
     *final_bsrr = (1U << FINAL_PIN);
 
-    // Wait 10 seconds (with watchdog kicking)
+    // Wait 10 seconds
     delay_ms(10000);
 
     // Software reset via AIRCR

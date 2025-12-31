@@ -116,8 +116,8 @@ def generate_c_code(blink_port: str, blink_pin: int,
     blink_clock_bit = ord(blink_port) - ord('A')
     final_clock_bit = ord(final_port) - ord('A')
 
-    # Read template file
-    template_path = Path(__file__).parent / "shellcode_template.c"
+    # Read minimal template file (back to basics - what was working)
+    template_path = Path(__file__).parent / "shellcode_minimal.c"
     with open(template_path, 'r') as f:
         template = f.read()
 
@@ -416,28 +416,8 @@ def inject_and_run_blink(mcu, shellcode: bytes, ram_address: int = 0x20000A00):
     print("    ✓ CPU halted")
     print()
 
-    # Initialize watchdog to maximum timeout (~26 seconds)
-    print("[2] Initializing watchdog to maximum timeout...")
-    IWDG_KR = 0x40003000
-    IWDG_PR = 0x40003004
-    IWDG_RLR = 0x40003008
-    IWDG_SR = 0x4000300C
-
-    # Enable write access
-    mcu.write_u32(IWDG_KR, 0x5555)
-    # Set prescaler to 256 (maximum)
-    mcu.write_u32(IWDG_PR, 0x06)
-    # Set reload to 4095 (maximum)
-    mcu.write_u32(IWDG_RLR, 0xFFF)
-    # Reload counter
-    mcu.write_u32(IWDG_KR, 0xAAAA)
-    # Enable watchdog
-    mcu.write_u32(IWDG_KR, 0xCCCC)
-    print("    ✓ Watchdog configured for ~26 second timeout")
-    print()
-
     # Write shellcode
-    print(f"[3] Writing {len(shellcode)} bytes to 0x{ram_address:08X}...")
+    print(f"[2] Writing {len(shellcode)} bytes to 0x{ram_address:08X}...")
     mcu.rsp.store(shellcode, ram_address)
 
     # Verify
@@ -450,7 +430,7 @@ def inject_and_run_blink(mcu, shellcode: bytes, ram_address: int = 0x20000A00):
     print()
 
     # Set PC (must have bit 0 set for Thumb mode)
-    print("[4] Setting PC to shellcode entry...")
+    print("[3] Setting PC to shellcode entry...")
     pc_thumb = ram_address | 0x01
 
     # Read all registers
@@ -468,7 +448,7 @@ def inject_and_run_blink(mcu, shellcode: bytes, ram_address: int = 0x20000A00):
     print()
 
     # Resume
-    print("[5] Resuming CPU...")
+    print("[4] Resuming CPU...")
     mcu.resume()
     print("    ✓ Shellcode is now executing!")
     print()

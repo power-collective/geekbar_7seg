@@ -44,8 +44,8 @@ def demo_basic_blink():
     print("Connecting to MCU...")
     with PY32F003(verbose=True) as mcu:
         # Prepare device
-        mcu.prepare_for_interactive_debug(reset_first=True)
-
+        #mcu.prepare_for_interactive_debug(reset_first=True)
+        mcu.reset(halt_immediately=True)
         # Inject and run
         inject_and_run_blink(mcu, shellcode)
 
