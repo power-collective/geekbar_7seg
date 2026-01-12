@@ -22,12 +22,6 @@
 #define IWDG_KR             (IWDG_BASE + 0x00)
 #define IWDG_KEY_RELOAD     0xAAAA
 
-// LED Zone Enable Pins (must stay HIGH to enable display)
-#define PIN_TOP_LEDS        (1 << 3)   // PA3 - Top zone enable
-#define PIN_BOT_LEDS        (1 << 4)   // PA4 - Bottom zone enable
-#define PIN_MID_LEDS        (1 << 5)   // PA5 - Middle zone enable
-#define PIN_ZONE_ENABLES    (PIN_TOP_LEDS | PIN_BOT_LEDS | PIN_MID_LEDS)
-
 // GPIO Register addresses
 #define GPIOA_BASE      0x50000000
 #define GPIOB_BASE      0x50000400
@@ -136,15 +130,14 @@ static void gpio_init(void) {
                      (3 << (5*2)) | (3 << (6*2)) | (3 << (7*2)) | (3 << (8*2));
 
     // Initialize: all cathodes HIGH (disabled), zone enables HIGH, segments LOW
-    // Zone enables (PA3,4,5) MUST be HIGH for display to work
-    GPIOA_ODR = PIN_DIGIT_BOTTOM_RIGHT | PIN_ZONE_ENABLES;  // PA8,3,4,5 HIGH
+    GPIOA_ODR = PIN_DIGIT_BOTTOM_RIGHT ;  // PA8 HIGH
     GPIOB_ODR = PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT | PIN_DIGIT_BOTTOM_LEFT;  // PB0,1,2 HIGH
 }
 
 // Convert 7-segment pattern to GPIO values
 static void pattern_to_gpio(uint8_t pattern, uint8_t show_leading_one, uint32_t *gpioa_out, uint32_t *gpiob_out) {
     // Start with all digit cathodes HIGH (disabled) and zone enables HIGH
-    uint32_t gpioa = PIN_DIGIT_BOTTOM_RIGHT | PIN_ZONE_ENABLES;
+    uint32_t gpioa = PIN_DIGIT_BOTTOM_RIGHT;
     uint32_t gpiob = PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT | PIN_DIGIT_BOTTOM_LEFT;
 
     // Map segment bits to pins
@@ -166,18 +159,21 @@ static void pattern_to_gpio(uint8_t pattern, uint8_t show_leading_one, uint32_t 
     *gpiob_out = gpiob;
 }
 
-// Display one digit at position (with optional leading "1")
+// Display one digit at position, optionally with leading "1"
 static void display_digit(uint8_t digit, uint8_t position, uint8_t show_leading_one) {
     uint32_t gpioa_val, gpiob_val;
 
-    // Get pattern (0xFF = blank)
-    uint8_t pattern = (digit <= 9) ? DIGIT_PATTERNS[digit] : 0x00;
+    // STEP 1: Blank all cathodes first to prevent ghosting
+    // This ensures clean transition between digits
+    GPIOA_ODR = PIN_DIGIT_BOTTOM_RIGHT ;  // All cathodes HIGH (disabled)
+    GPIOB_ODR = PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT | PIN_DIGIT_BOTTOM_LEFT;
 
-    // Convert to GPIO (starts with all cathodes HIGH)
-    // Include leading "1" in the same pattern if requested
+    // STEP 2: Get pattern and convert to GPIO values
+    uint8_t pattern = (digit <= 9) ? DIGIT_PATTERNS[digit] : 0x00;
     pattern_to_gpio(pattern, show_leading_one, &gpioa_val, &gpiob_val);
 
-    // Enable selected digit cathode (pull LOW)
+    // STEP 3: Enable selected digit cathode (pull LOW) in calculated value
+    // Do this BEFORE writing to avoid read-modify-write issues
     switch (position) {
         case 0: gpiob_val &= ~PIN_DIGIT_TOP_LEFT; break;
         case 1: gpiob_val &= ~PIN_DIGIT_TOP_RIGHT; break;
@@ -185,13 +181,38 @@ static void display_digit(uint8_t digit, uint8_t position, uint8_t show_leading_
         case 3: gpioa_val &= ~PIN_DIGIT_BOTTOM_RIGHT; break;
     }
 
-    // Write directly to ODR (matches test_segment_mapping.py behavior)
+    // STEP 4: Write final values once (matches test_segment_mapping.py)
     GPIOA_ODR = gpioa_val;
     GPIOB_ODR = gpiob_val;
 }
 
-// REMOVED: display_leading_one() - Leading "1" is now integrated into display_digit()
-// The PA11 pin is treated as an 8th segment bit, not a separate display cycle
+// Display leading "1" at specified position
+// Position 0-1 (top row): requires PB0 AND PB1 both LOW
+// Position 2-3 (bottom row): requires PB2 AND PA8 both LOW
+static void display_leading_one(uint8_t position) {
+    // STEP 1: Blank all cathodes first
+    GPIOA_ODR = PIN_DIGIT_BOTTOM_RIGHT ;
+    GPIOB_ODR = PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT | PIN_DIGIT_BOTTOM_LEFT;
+
+    // STEP 2: Calculate final GPIO values
+    // PA11 HIGH for leading "1" anode, all segments LOW
+    uint32_t gpioa_val = PIN_DIGIT_BOTTOM_RIGHT | PIN_LEADING_ONE_ANODE;
+    uint32_t gpiob_val = PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT | PIN_DIGIT_BOTTOM_LEFT;
+
+    // STEP 3: Enable cathodes based on position (top or bottom row)
+    if (position <= 1) {
+        // Top row: enable both PB0 and PB1
+        gpiob_val &= ~(PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT);
+    } else {
+        // Bottom row: enable both PB2 and PA8
+        gpiob_val &= ~PIN_DIGIT_BOTTOM_LEFT;
+        gpioa_val &= ~PIN_DIGIT_BOTTOM_RIGHT;
+    }
+
+    // STEP 4: Write final values once
+    GPIOA_ODR = gpioa_val;
+    GPIOB_ODR = gpiob_val;
+}
 
 // Entry point
 void __attribute__((section(".text.entry"))) shellcode_entry(void) {
@@ -217,41 +238,44 @@ void __attribute__((section(".text.entry"))) shellcode_entry(void) {
     // Will re-enable before exiting
     __asm__ volatile ("cpsid i" ::: "memory");
 
-    // Calculate cycles (PY32F030 defaults to 8MHz HSI, ~5ms per digit)
-    // At 8MHz: 5ms = 40,000 cycles
-    // Loop overhead ~4 cycles/iteration: 40,000 / 4 = 10,000 iterations
-    const uint32_t digit_delay = 10000;
+    // Calculate cycles for multiplexing
+    // Target: 2ms per digit for smooth 500Hz refresh (4 digits = 8ms total cycle = 125Hz)
+    // At 8MHz HSI: 2ms = 16,000 cycles
+    // Loop overhead ~4 cycles/iteration: 16,000 / 4 = 4,000 iterations
+    const uint32_t digit_delay = 4000;
 
     // Count how many digits are actually displayed (not blank)
-    // Note: Leading "1" is integrated into digit display, not counted separately
     uint8_t active_digit_count = 0;
     for (uint8_t i = 0; i < 4; i++) {
         if (digits[i] != 0xFF) active_digit_count++;
     }
+    // Leading "1" is shown during digit cycles, not separately
 
     // Calculate actual cycle time based on digits that will be shown
-    const uint32_t cycle_time_ms = active_digit_count * 5;  // 5ms per active digit
-
+    const uint32_t cycle_time_ms = active_digit_count * 2;  // 2ms per active digit
     // Multiplex display - avoid division by using multiplication in loop condition
     // Loop while: (cycle * cycle_time_ms) < duration_ms
     for (uint32_t cycle = 0; cycle_time_ms > 0 && (cycle * cycle_time_ms) < duration_ms; cycle++) {
         // Kick watchdog to prevent reset (if IWDG is enabled by firmware)
         REG32(IWDG_KR) = IWDG_KEY_RELOAD;
 
-        // Show all 4 digits
-        // Leading "1" is integrated into the digit display at the specified position
+        // Show all 4 digit positions
         for (uint8_t pos = 0; pos < 4; pos++) {
             if (digits[pos] != 0xFF) {  // 0xFF = blank
-                // Show leading "1" only at the designated position
-                uint8_t show_leading = (show_leading_one && pos == leading_one_pos) ? 1 : 0;
-                display_digit(digits[pos], pos, show_leading);
+                // Determine if this position should show leading "1"
+                // Leading "1" spans a row: positions 0-1 (top) or 2-3 (bottom)
+                uint8_t show_led1_here = show_leading_one &&
+                                         ((pos <= 1 && leading_one_pos <= 1) ||
+                                          (pos >= 2 && leading_one_pos >= 2));
+
+                display_digit(digits[pos], pos, show_led1_here);
                 delay_cycles(digit_delay);
             }
         }
     }
 
     // Turn off display (keep zone enables HIGH)
-    GPIOA_ODR = PIN_DIGIT_BOTTOM_RIGHT | PIN_ZONE_ENABLES;  // All cathodes HIGH, zones enabled
+    GPIOA_ODR = PIN_DIGIT_BOTTOM_RIGHT ;  // All cathodes HIGH, zones enabled
     GPIOB_ODR = PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT | PIN_DIGIT_BOTTOM_LEFT;
 
     // Re-enable interrupts before finishing

@@ -451,9 +451,17 @@ if __name__ == '__main__':
         leading_pos = int(sys.argv[2])
         d2 = int(sys.argv[3])
         d3 = int(sys.argv[4])
-        digits = [0xFF, 0xFF, d2, d3]
 
-        print(f"Generating shellcode to show leading '1' at position {leading_pos} + [{d2}{d3}]")
+        # Place digits on same row as leading "1"
+        # Position 0-1: top row, Position 2-3: bottom row
+        if leading_pos <= 1:
+            digits = [d2, d3, 0xFF, 0xFF]  # Top row
+            row_name = "top"
+        else:
+            digits = [0xFF, 0xFF, d2, d3]  # Bottom row
+            row_name = "bottom"
+
+        print(f"Generating shellcode to show leading '1' on {row_name} row (pos {leading_pos}) + [{d2}{d3}]")
         shellcode = generate_display_shellcode(
             digits=digits,
             show_leading_one=True,
