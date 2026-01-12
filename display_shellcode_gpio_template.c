@@ -129,9 +129,17 @@ static void gpio_init(void) {
     GPIOB_OSPEEDR |= (3 << (0*2)) | (3 << (1*2)) | (3 << (2*2)) | (3 << (3*2)) |
                      (3 << (5*2)) | (3 << (6*2)) | (3 << (7*2)) | (3 << (8*2));
 
-    // Initialize: all cathodes HIGH (disabled), zone enables HIGH, segments LOW
-    GPIOA_ODR = PIN_DIGIT_BOTTOM_RIGHT ;  // PA8 HIGH
-    GPIOB_ODR = PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT | PIN_DIGIT_BOTTOM_LEFT;  // PB0,1,2 HIGH
+    // Initialize: all cathodes HIGH (disabled), segments LOW
+    // Use read-modify-write to preserve other pins
+    uint32_t odr_a = GPIOA_ODR;
+    odr_a &= ~GPIOA_DISPLAY_MASK;  // Clear display pins
+    odr_a |= PIN_DIGIT_BOTTOM_RIGHT;  // PA8 HIGH (cathode disabled)
+    GPIOA_ODR = odr_a;
+
+    uint32_t odr_b = GPIOB_ODR;
+    odr_b &= ~GPIOB_DISPLAY_MASK;  // Clear display pins
+    odr_b |= (PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT | PIN_DIGIT_BOTTOM_LEFT);  // PB0,1,2 HIGH (cathodes disabled)
+    GPIOB_ODR = odr_b;
 }
 
 // Convert 7-segment pattern to GPIO values
@@ -164,16 +172,22 @@ static void display_digit(uint8_t digit, uint8_t position, uint8_t show_leading_
     uint32_t gpioa_val, gpiob_val;
 
     // STEP 1: Blank all cathodes first to prevent ghosting
-    // This ensures clean transition between digits
-    GPIOA_ODR = PIN_DIGIT_BOTTOM_RIGHT ;  // All cathodes HIGH (disabled)
-    GPIOB_ODR = PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT | PIN_DIGIT_BOTTOM_LEFT;
+    // Use read-modify-write to preserve non-display pins
+    uint32_t odr_a = GPIOA_ODR;
+    odr_a &= ~GPIOA_DISPLAY_MASK;
+    odr_a |= PIN_DIGIT_BOTTOM_RIGHT;  // All cathodes HIGH (disabled)
+    GPIOA_ODR = odr_a;
+
+    uint32_t odr_b = GPIOB_ODR;
+    odr_b &= ~GPIOB_DISPLAY_MASK;
+    odr_b |= (PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT | PIN_DIGIT_BOTTOM_LEFT);
+    GPIOB_ODR = odr_b;
 
     // STEP 2: Get pattern and convert to GPIO values
     uint8_t pattern = (digit <= 9) ? DIGIT_PATTERNS[digit] : 0x00;
     pattern_to_gpio(pattern, show_leading_one, &gpioa_val, &gpiob_val);
 
     // STEP 3: Enable selected digit cathode (pull LOW) in calculated value
-    // Do this BEFORE writing to avoid read-modify-write issues
     switch (position) {
         case 0: gpiob_val &= ~PIN_DIGIT_TOP_LEFT; break;
         case 1: gpiob_val &= ~PIN_DIGIT_TOP_RIGHT; break;
@@ -181,18 +195,32 @@ static void display_digit(uint8_t digit, uint8_t position, uint8_t show_leading_
         case 3: gpioa_val &= ~PIN_DIGIT_BOTTOM_RIGHT; break;
     }
 
-    // STEP 4: Write final values once (matches test_segment_mapping.py)
-    GPIOA_ODR = gpioa_val;
-    GPIOB_ODR = gpiob_val;
+    // STEP 4: Write final values using read-modify-write to preserve non-display pins
+    odr_a = GPIOA_ODR;
+    odr_a &= ~GPIOA_DISPLAY_MASK;  // Clear display pins
+    odr_a |= (gpioa_val & GPIOA_DISPLAY_MASK);  // Set new display values
+    GPIOA_ODR = odr_a;
+
+    odr_b = GPIOB_ODR;
+    odr_b &= ~GPIOB_DISPLAY_MASK;  // Clear display pins
+    odr_b |= (gpiob_val & GPIOB_DISPLAY_MASK);  // Set new display values
+    GPIOB_ODR = odr_b;
 }
 
 // Display leading "1" at specified position
 // Position 0-1 (top row): requires PB0 AND PB1 both LOW
 // Position 2-3 (bottom row): requires PB2 AND PA8 both LOW
 static void display_leading_one(uint8_t position) {
-    // STEP 1: Blank all cathodes first
-    GPIOA_ODR = PIN_DIGIT_BOTTOM_RIGHT ;
-    GPIOB_ODR = PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT | PIN_DIGIT_BOTTOM_LEFT;
+    // STEP 1: Blank all cathodes first using read-modify-write
+    uint32_t odr_a = GPIOA_ODR;
+    odr_a &= ~GPIOA_DISPLAY_MASK;
+    odr_a |= PIN_DIGIT_BOTTOM_RIGHT;
+    GPIOA_ODR = odr_a;
+
+    uint32_t odr_b = GPIOB_ODR;
+    odr_b &= ~GPIOB_DISPLAY_MASK;
+    odr_b |= (PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT | PIN_DIGIT_BOTTOM_LEFT);
+    GPIOB_ODR = odr_b;
 
     // STEP 2: Calculate final GPIO values
     // PA11 HIGH for leading "1" anode, all segments LOW
@@ -209,9 +237,16 @@ static void display_leading_one(uint8_t position) {
         gpioa_val &= ~PIN_DIGIT_BOTTOM_RIGHT;
     }
 
-    // STEP 4: Write final values once
-    GPIOA_ODR = gpioa_val;
-    GPIOB_ODR = gpiob_val;
+    // STEP 4: Write final values using read-modify-write
+    odr_a = GPIOA_ODR;
+    odr_a &= ~GPIOA_DISPLAY_MASK;
+    odr_a |= (gpioa_val & GPIOA_DISPLAY_MASK);
+    GPIOA_ODR = odr_a;
+
+    odr_b = GPIOB_ODR;
+    odr_b &= ~GPIOB_DISPLAY_MASK;
+    odr_b |= (gpiob_val & GPIOB_DISPLAY_MASK);
+    GPIOB_ODR = odr_b;
 }
 
 // Entry point
@@ -274,9 +309,17 @@ void __attribute__((section(".text.entry"))) shellcode_entry(void) {
         }
     }
 
-    // Turn off display (keep zone enables HIGH)
-    GPIOA_ODR = PIN_DIGIT_BOTTOM_RIGHT ;  // All cathodes HIGH, zones enabled
-    GPIOB_ODR = PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT | PIN_DIGIT_BOTTOM_LEFT;
+    // Turn off display: all cathodes HIGH (disabled), segments LOW
+    // Use read-modify-write to preserve non-display pins
+    uint32_t odr_a = GPIOA_ODR;
+    odr_a &= ~GPIOA_DISPLAY_MASK;
+    odr_a |= PIN_DIGIT_BOTTOM_RIGHT;  // PA8 HIGH (cathode disabled)
+    GPIOA_ODR = odr_a;
+
+    uint32_t odr_b = GPIOB_ODR;
+    odr_b &= ~GPIOB_DISPLAY_MASK;
+    odr_b |= (PIN_DIGIT_TOP_LEFT | PIN_DIGIT_TOP_RIGHT | PIN_DIGIT_BOTTOM_LEFT);  // PB0,1,2 HIGH (cathodes disabled)
+    GPIOB_ODR = odr_b;
 
     // Re-enable interrupts before finishing
     __asm__ volatile ("cpsie i" ::: "memory");

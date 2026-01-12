@@ -17,6 +17,94 @@ from pyrsp.rsp import CortexM3, RSP
 _active_connections = weakref.WeakSet()
 
 
+# =============================================================================
+# GDB Remote Serial Protocol RLE Decoding
+# =============================================================================
+
+def gdb_rle_decode(encoded):
+    """
+    Decode GDB Remote Serial Protocol RLE-encoded string.
+
+    In GDB RSP:
+    - '*' followed by a character indicates repetition
+    - Repeat count = (ASCII value of char) - 28 total occurrences
+    - The character before '*' is what gets repeated
+
+    Args:
+        encoded: RLE-encoded string
+
+    Returns:
+        str: Decoded string
+
+    Example:
+        >>> gdb_rle_decode('01000*!10')
+        '0100000000010'  # '0'*5 + '1' + '0'
+    """
+    decoded = []
+    i = 0
+
+    while i < len(encoded):
+        if i + 1 < len(encoded) and encoded[i + 1] == '*':
+            # We have a repeat sequence
+            if i + 2 < len(encoded):
+                # Get the character to repeat (before the *)
+                char_to_repeat = encoded[i]
+                # Get the repeat count character (after the *)
+                repeat_char = encoded[i + 2]
+                # Calculate total count: N - 28
+                total_count = ord(repeat_char) - 28
+
+                decoded.append(char_to_repeat * total_count)
+                i += 3  # Skip past the char, *, and count char
+            else:
+                # Malformed - just append what we have
+                decoded.append(encoded[i])
+                i += 1
+        else:
+            # Regular character
+            decoded.append(encoded[i])
+            i += 1
+
+    return ''.join(decoded)
+
+
+def clean_and_decode_gdb_response(raw_input):
+    """
+    Clean up GDB response and decode RLE if needed.
+
+    Handles packet markers like $ and # if present.
+    Only performs RLE decoding if special characters are detected.
+
+    Args:
+        raw_input: Raw GDB response string
+
+    Returns:
+        str: Cleaned and decoded string (uppercase)
+
+    Example:
+        >>> clean_and_decode_gdb_response('$01000*!10#5a')
+        '0100000000010'
+    """
+    # Remove any packet markers and checksums if present
+    # GDB packets are typically $<data>#<checksum>
+    cleaned = raw_input.strip()
+
+    # If it starts with $, remove it
+    if cleaned.startswith('$'):
+        cleaned = cleaned[1:]
+
+    # If there's a #checksum at the end, remove it
+    if '#' in cleaned:
+        cleaned = cleaned.split('#')[0]
+
+    # Only decode RLE if '*' marker is present
+    if '*' in cleaned:
+        cleaned = gdb_rle_decode(cleaned)
+
+    # Convert to uppercase to match expected output
+    return cleaned.upper()
+
+
 class Pin:
     """
     Represents a single GPIO pin with convenient methods
@@ -102,10 +190,10 @@ class Pin:
 
 class PY32F003:
     """
-    Interactive debugger for PY32F003/F030 MCUs via Black Magic Probe
+    Interactive debugger for PY32F003/F030 MCUs via Black Magic Probe or TCP GDB
 
     Features:
-    - Auto-detect device via glob pattern
+    - Auto-detect device via glob pattern or connect via TCP
     - Context manager support (use with 'with' statement)
     - GPIO control (read/write pins, configure as input/output)
     - Flash operations (unlock, erase, program, read)
@@ -113,13 +201,19 @@ class PY32F003:
     - Watchdog handling
     - Option byte management
 
-    Example usage:
+    Example usage (Serial):
         with PY32F003() as mcu:
             mcu.halt()
             mcu.gpio_set_output('A', 1)
             mcu.gpio_set_high('A', 1)
             value = mcu.read_u32(mcu.GPIOA_ODR)
             print(f"GPIOA_ODR: 0x{value:04X}")
+
+    Example usage (TCP):
+        with PY32F003(device='localhost:2331') as mcu:
+            mcu.halt()
+            mcu.gpio_set_output('A', 1)
+            mcu.gpio_set_high('A', 1)
     """
 
     # ========================================================================
@@ -229,6 +323,12 @@ class PY32F003:
     RCC_ICSCR_HSI_FS_24MHz = 0x00008000
     RCC_ICSCR_HSI_TRIM_Mask = 0x00001FFF
 
+    # System Control Block (for reset)
+    SCB_AIRCR = 0xE000ED0C  # Application Interrupt and Reset Control Register
+
+    # Default system clock (HSI)
+    DEFAULT_SYSCLK_HZ = 24_000_000  # 24 MHz HSI
+
     # DBGMCU
     DBGMCU_BASE = 0x40015800
     DBGMCU_CR = 0x40015804
@@ -321,11 +421,13 @@ class PY32F003:
 
     def __init__(self, device=None, verbose=False):
         """
-        Initialize connection to PY32F003/F030 MCU via Black Magic Probe
+        Initialize connection to PY32F003/F030 MCU via Black Magic Probe or TCP GDB
 
         Args:
-            device: Device path, glob pattern, or None for auto-detect
-                   Examples: '/dev/cu.usbmodem101', '/dev/cu.usbmodem*', None
+            device: Device path, glob pattern, TCP address, or None for auto-detect
+                   Examples:
+                     - Serial: '/dev/cu.usbmodem101', '/dev/cu.usbmodem*', None
+                     - TCP: 'localhost:2331', '192.168.1.100:3333'
             verbose: Enable verbose output from pyrsp
         """
         self.verbose = verbose
@@ -335,6 +437,31 @@ class PY32F003:
 
         # Register this connection for automatic cleanup on interpreter exit
         _active_connections.add(self)
+
+    def _is_tcp_address(self, device):
+        """
+        Check if device string is a TCP address (hostname:port or ip:port)
+
+        Args:
+            device: Device string to check
+
+        Returns:
+            bool: True if device is a TCP address format
+        """
+        if ':' not in device:
+            return False
+
+        # Split on last colon to handle IPv6 addresses
+        parts = device.rsplit(':', 1)
+        if len(parts) != 2:
+            return False
+
+        # Check if port is a valid number
+        try:
+            port = int(parts[1])
+            return 1 <= port <= 65535
+        except ValueError:
+            return False
 
     def _verify_gdb_device(self, device_path):
         """
@@ -396,14 +523,21 @@ class PY32F003:
 
     def _detect_device(self, device):
         """
-        Auto-detect Black Magic Probe device by verifying GDB response
+        Auto-detect Black Magic Probe device or validate TCP address
 
         Args:
-            device: Device path, glob pattern, or None
+            device: Device path, glob pattern, TCP address, or None
+                   If None or glob finds nothing, defaults to localhost:1337
 
         Returns:
-            str: Resolved device path
+            str: Resolved device path or TCP address (defaults to localhost:1337)
         """
+        # If device is a TCP address, return it directly
+        if device and self._is_tcp_address(device):
+            if self.verbose:
+                print(f"Using TCP GDB connection: {device}")
+            return device
+
         if device is None:
             # Auto-detect using common patterns
             patterns = [
@@ -425,15 +559,18 @@ class PY32F003:
                             print(f"  ✓ Verified GDB device: {dev}")
                         return dev
 
-            raise RuntimeError(
-                "No Black Magic Probe found. Please specify device path.\n"
-                "Common paths: /dev/cu.usbmodem* (macOS), /dev/ttyACM* (Linux)"
-            )
+            # No serial devices found - default to localhost:1337 (probe-rs gdb server)
+            if self.verbose:
+                print("No serial Black Magic Probe found, defaulting to localhost:1337")
+            return "localhost:1337"
         elif '*' in device or '?' in device:
             # User provided glob pattern - verify each match
             devices = sorted(_glob.glob(device))
             if not devices:
-                raise RuntimeError(f"No device found matching pattern: {device}")
+                # No devices match glob pattern - default to localhost:1337
+                if self.verbose:
+                    print(f"No devices found matching pattern '{device}', defaulting to localhost:1337")
+                return "localhost:1337"
 
             if self.verbose:
                 print(f"Found {len(devices)} device(s) matching {device}")
@@ -800,9 +937,131 @@ class PY32F003:
         """
         self.write_u32(self.AIRCR, self.AIRCR_VECTKEY | self.AIRCR_SYSRESETREQ)
 
+    def inject_and_run_shellcode(self, shellcode, ram_address=0x20000100):
+        """
+        Inject shellcode into RAM and execute by setting PC
+
+        This method:
+        1. Resets the MCU to a known state
+        2. Halts the CPU
+        3. Writes shellcode to RAM
+        4. Verifies the write
+        5. Sets PC to the shellcode entry point (with Thumb bit set)
+        6. Resumes execution
+
+        Args:
+            shellcode: Binary shellcode to inject (bytes)
+            ram_address: Target RAM address (default: 0x20000A00)
+
+        Example:
+            >>> with PY32F003() as mcu:
+            ...     shellcode = b'\\x01\\x20...'
+            ...     mcu.inject_and_run_shellcode(shellcode)
+
+        Note:
+            The PC will be set to (ram_address | 0x01) to enable Thumb mode,
+            which is required for Cortex-M processors.
+        """
+        print("\n" + "="*70)
+        print("Injecting and Running Shellcode")
+        print("="*70)
+        print()
+
+        # Reset to known state first
+        print("[1] Resetting MCU to known state...")
+        self.reset(halt_immediately=False)
+        time.sleep(0.05)
+        print("    ✓ MCU reset")
+        print()
+
+        # Halt CPU
+        print("[2] Halting CPU...")
+        self.halt()
+        print("    ✓ CPU halted")
+        print()
+
+        # Write shellcode
+        print(f"[3] Writing {len(shellcode)} bytes to 0x{ram_address:08X}...")
+        self.rsp.store(shellcode, ram_address)
+
+        # Verify
+        verify = self.dump_memory(ram_address, len(shellcode))
+        if verify == shellcode:
+            print(f"    ✓ Shellcode written and verified")
+        else:
+            print(f"    ✗ Verification failed!")
+            raise RuntimeError("Shellcode write verification failed")
+        print()
+
+        # Set PC (must have bit 0 set for Thumb mode)
+        print("[4] Setting PC to shellcode entry...")
+        pc_thumb = ram_address | 0x01
+
+        # Read all registers (RLE will be auto-decoded if present)
+        all_regs = self.rsp.fetch(b'g')
+        decoded_hex = all_regs.decode('ascii')
+
+        # Decode if RLE is present (fallback in case it wasn't auto-decoded)
+        if '*' in decoded_hex:
+            decoded_hex = clean_and_decode_gdb_response(decoded_hex)
+
+        reg_bytes = bytearray(bytes.fromhex(decoded_hex))
+
+        # Modify PC (register 15, offset 60)
+        pc_bytes = pc_thumb.to_bytes(4, byteorder='little')
+        reg_bytes[60:64] = pc_bytes
+
+        # Write back
+        reg_hex = reg_bytes.hex().encode('ascii')
+        self.rsp.fetchOK(b'G' + reg_hex)
+        print(f"    ✓ PC set to 0x{pc_thumb:08X}")
+        print()
+
+        # Resume
+        print("[5] Resuming CPU...")
+        self.resume()
+        print("    ✓ Shellcode is now executing!")
+        print()
+
+        print("="*70)
+        print("✓ Execution Started")
+        print("="*70)
+        print()
+
     # ========================================================================
     # GPIO Operations
     # ========================================================================
+
+    @staticmethod
+    def parse_gpio_pin(pin_spec):
+        """
+        Parse GPIO pin specification like "PA5" or "PB12"
+
+        Args:
+            pin_spec: Pin name (e.g., "PA5", "PB1")
+
+        Returns:
+            Tuple of (port_letter, pin_number)
+
+        Example:
+            >>> PY32F003.parse_gpio_pin("PA5")
+            ('A', 5)
+        """
+        match = re.match(r'P([A-F])(\d+)', pin_spec.upper())
+        if not match:
+            raise ValueError(f"Invalid GPIO pin: {pin_spec}. Expected format: PA5, PB12, etc.")
+
+        port = match.group(1)
+        pin = int(match.group(2))
+
+        valid_ports = ['A', 'B', 'C', 'D', 'F']
+        if port not in valid_ports:
+            raise ValueError(f"Invalid GPIO port: {port}. Valid ports: {valid_ports}")
+
+        if pin > 15:
+            raise ValueError(f"Invalid pin number: {pin}. Must be 0-15")
+
+        return (port, pin)
 
     def _get_gpio_base(self, port):
         """
@@ -882,19 +1141,14 @@ class PY32F003:
         """
         Set GPIO pin output LOW
 
-        Uses BSRR register for atomic bit-reset operation (more efficient and safer
-        than read-modify-write on ODR).
-
-        Args:
-            port: Port letter ('A', 'B', or 'F')
-            pin: Pin number (0-15)
+        Uses BRR (Bit Reset Register) at offset 0x28.
+        Writing 1 to bit (pin) clears the corresponding ODR bit.
         """
         base = self._get_gpio_base(port)
-        bsrr_addr = base + self.BSRR_OFFSET
+        brr_addr = base + self.BRR_OFFSET
 
-        # BSRR bits [31:16] reset corresponding ODR bits
-        # Writing 1 to bit (16+pin) clears ODR bit (pin)
-        self.write_u32(bsrr_addr, 1 << (16 + pin))
+        # Writing 1 to bit 'n' in BRR clears bit 'n' in ODR
+        self.write_u32(brr_addr, 1 << pin)
 
     def gpio_toggle(self, port, pin):
         """
@@ -1378,7 +1632,6 @@ class PY32F003:
             if self.verbose:
                 print("\n[1] Resetting MCU to known state...")
             self.reset(halt_immediately=False)
-            time.sleep(0.05)  # Brief delay after reset
             if self.verbose:
                 print("    ✓ Reset complete")
 
@@ -1873,6 +2126,7 @@ if __name__ == '__main__':
     print()
     print("from utils.pyrsp_py32f003 import PY32F003")
     print()
+    print("# Serial connection (auto-detect):")
     print("with PY32F003() as mcu:")
     print("    # CPU control")
     print("    mcu.halt()")
@@ -1890,5 +2144,10 @@ if __name__ == '__main__':
     print("    # Register access")
     print("    mcu.dump_registers()  # Show all registers")
     print("    lr = mcu.read_register('lr')  # Read link register")
+    print()
+    print("# TCP connection:")
+    print("with PY32F003(device='localhost:2331') as mcu:")
+    print("    mcu.halt()")
+    print("    value = mcu.read_u32(mcu.GPIOA_ODR)")
     print()
     print("="*60)
