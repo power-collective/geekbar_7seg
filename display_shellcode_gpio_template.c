@@ -256,7 +256,7 @@ void __attribute__((section(".text.entry"))) shellcode_entry(void) {
     // Set SP to top of RAM (0x20001000) to avoid HardFault
     // Use only Thumb16 instructions compatible with ARMv6-M (Cortex-M0+)
     register uint32_t sp_val __asm__("r0");
-    sp_val = 0x20001000;
+    sp_val = 0x20000000;
     __asm__ volatile ("mov sp, %0" :: "r"(sp_val) : "memory");
 
     // Configuration from template

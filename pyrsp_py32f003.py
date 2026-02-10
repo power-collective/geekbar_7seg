@@ -37,8 +37,10 @@ def gdb_rle_decode(encoded):
         str: Decoded string
 
     Example:
-        >>> gdb_rle_decode('01000*!10')
-        '0100000000010'  # '0'*5 + '1' + '0'
+        >>> gdb_rle_decode('0* ')
+        '000'  # '0' repeated (ASCII(space)=32, 32-29=3) times
+        >>> gdb_rle_decode('00*!FF')
+        '00000FF'  # '0' repeated (ASCII('!')=33, 33-29=4) times
     """
     decoded = []
     i = 0
@@ -51,7 +53,7 @@ def gdb_rle_decode(encoded):
                 char_to_repeat = encoded[i]
                 # Get the repeat count character (after the *)
                 repeat_char = encoded[i + 2]
-                # Calculate total count: N - 28
+                # Calculate total count: N - 28 (per GDB spec)
                 total_count = ord(repeat_char) - 28
 
                 decoded.append(char_to_repeat * total_count)
@@ -432,6 +434,11 @@ class PY32F003:
         """
         self.verbose = verbose
         self.device = self._detect_device(device)
+
+        # Store original methods before patching (will be restored on close)
+        self._original_fetchOK = None
+        self._original_readpkt = None
+
         self.rsp = self._quick_connect()
         self._closed = False
 
@@ -596,11 +603,21 @@ class PY32F003:
 
     def _quick_connect(self):
         """
-        Connect to device with RSP.fetchOK monkeypatch
+        Connect to device with RSP monkeypatches
 
-        This monkeypatch allows halt responses (T packets) to be accepted
+        This applies two monkeypatches:
+        1. fetchOK - allows halt responses (T packets) to be accepted
+        2. readpkt - automatically decodes GDB RLE encoding in responses
+
+        The patches remain active for the lifetime of this connection and are
+        restored when close() is called.
         """
-        original_fetchOK = RSP.fetchOK
+        # Store original methods so we can restore them later
+        self._original_fetchOK = RSP.fetchOK
+        self._original_readpkt = RSP.readpkt
+
+        # Capture original methods in closure for patched functions
+        original_readpkt = self._original_readpkt
 
         def patched_fetchOK(self, data, ok=b'OK'):
             res = self.fetch(data)
@@ -609,17 +626,43 @@ class PY32F003:
             if res != ok:
                 raise ValueError(res)
 
-        RSP.fetchOK = patched_fetchOK
+        def patched_readpkt(self, timeout=0):
+            """
+            Read packet and automatically decode GDB RLE if present
 
-        try:
-            if self.verbose:
-                print(f"Connecting to Black Magic Probe at {self.device}...")
-            rsp = CortexM3(self.device, elffile=None, verbose=self.verbose)
-            if self.verbose:
-                print("Connected!")
-            return rsp
-        finally:
-            RSP.fetchOK = original_fetchOK
+            GDB uses RLE encoding where '*' followed by a character indicates
+            repetition. This must be decoded before unhex() is called.
+            """
+            # Call original readpkt using the captured reference
+            res = original_readpkt(self, timeout)
+
+            # If result is empty or None, return as-is
+            if not res:
+                return res
+
+            # Check if RLE encoding is present (contains '*')
+            if b'*' in res:
+                # Decode from bytes to string for RLE processing
+                try:
+                    res_str = res.decode('ascii')
+                    decoded_str = gdb_rle_decode(res_str)
+                    res = decoded_str.encode('ascii')
+                except Exception:
+                    # If decoding fails, return original (safer than crashing)
+                    pass
+
+            return res
+
+        # Apply both patches - they will remain active until close() is called
+        RSP.fetchOK = patched_fetchOK
+        RSP.readpkt = patched_readpkt
+
+        if self.verbose:
+            print(f"Connecting to Black Magic Probe at {self.device}...")
+        rsp = CortexM3(self.device, elffile=None, verbose=self.verbose)
+        if self.verbose:
+            print("Connected!")
+        return rsp
 
     # ========================================================================
     # Context Manager Support
@@ -677,6 +720,12 @@ class PY32F003:
             self.rsp.port.close(self.rsp)
         except:
             pass
+
+        # Restore original RSP methods if we patched them
+        if self._original_fetchOK is not None:
+            RSP.fetchOK = self._original_fetchOK
+        if self._original_readpkt is not None:
+            RSP.readpkt = self._original_readpkt
 
     # ========================================================================
     # Memory Access
@@ -937,7 +986,7 @@ class PY32F003:
         """
         self.write_u32(self.AIRCR, self.AIRCR_VECTKEY | self.AIRCR_SYSRESETREQ)
 
-    def inject_and_run_shellcode(self, shellcode, ram_address=0x20000100):
+    def inject_and_run_shellcode(self, shellcode, ram_address=0x20000A00):
         """
         Inject shellcode into RAM and execute by setting PC
 

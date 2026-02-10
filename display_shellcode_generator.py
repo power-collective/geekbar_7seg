@@ -53,7 +53,7 @@ from typing import Optional, Dict
 def generate_c_code(digits: list = None,
                    show_leading_one: bool = False,
                    leading_one_position: int = 0,
-                   duration_ms: int = 3000,
+                   duration_ms: int = 300000,
                    do_reset: bool = False) -> str:
     """
     Generate C code for GPIO-based display shellcode from template
@@ -218,7 +218,7 @@ def generate_display_shellcode(digits: list = None,
                                leading_one_position: int = 0,
                                duration_ms: int = 3000,
                                do_reset: bool = False,
-                               target_addr: int = 0x20000100,
+                               target_addr: int = 0x20000A00,
                                optimization: str = 'Os') -> bytes:
     """
     Generate GPIO-based display control shellcode
@@ -362,7 +362,7 @@ def show_number(mcu, number: int, duration_ms: int = 3000, position: str = 'bott
 
 
 def show_all_digits(mcu, digits: list, duration_ms: int = 3000,
-                   show_leading_one: bool = False, leading_one_pos: int = 0, ram_addr: int = 0x20000100):
+                   show_leading_one: bool = False, leading_one_pos: int = 0, ram_addr: int = 0x20000A00):
     """
     Convenience function to show all 4 digits
 
@@ -441,7 +441,7 @@ if __name__ == '__main__':
 
         digits = [int(sys.argv[i]) for i in range(2, 6)]
         print(f"Generating shellcode to show: [{digits[0]}{digits[1]}] [{digits[2]}{digits[3]}]")
-        shellcode = generate_display_shellcode(digits=digits, duration_ms=5000)
+        shellcode = generate_display_shellcode(digits=digits, duration_ms=60*60*24*1000)
 
     elif mode == 'leading1':
         if len(sys.argv) != 5:
