@@ -1,5 +1,7 @@
 # 7-Segment Display Shellcode Generator
 
+<img src="geekbar_demo.jpg" width="400" alt="GeekBar demo board with 7-segment display">
+
 Python tool that generates, compiles, and injects ARM Thumb shellcode to directly control the 4-digit 7-segment display on the BD0027 board via GDB/Black Magic Probe.
 
 ## Hardware Details
