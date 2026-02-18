@@ -1,97 +1,85 @@
-# 7-Segment Display Control Library
+# 7-Segment Display Shellcode Generator
 
-Direct hardware control for the BD0027 7-segment displays, based on firmware reverse engineering.
-
-## Overview
-
-This library provides low-level control over the two 7-segment LED digits on the BD0027 board. It allows custom firmware (shellcode) to display arbitrary numbers and patterns without relying on the original firmware's display routines.
+Python tool that generates, compiles, and injects ARM Thumb shellcode to directly control the 4-digit 7-segment display on the BD0027 board via GDB/Black Magic Probe.
 
 ## Hardware Details
 
+**Board:** BD0027 ([schematic/RE available here](https://github.com/schlae/VapeRE/tree/main/BD0027))
 **Microcontroller:** PY32F030K28 (ARM Cortex-M0+)
-**Display:** Two 7-segment digits with multiplexed common cathode
+**Display:** 4 digit positions across two dual 7-segment displays, cathode multiplexed
 **Refresh Method:** Time-multiplexing via software (no timer interrupts required)
+
+### Display Layout
+
+```
+[0] [1]    (Top row)
+[2] [3]    (Bottom row)
+```
+
+An optional **leading "1"** can be displayed on either row via a dedicated anode pin (PA11).
 
 ### Pin Mapping
 
-Based on schematic analysis and firmware reverse engineering:
+**Digit Cathode Pins (Active LOW):**
 
-| Segment | GPIO Pin | Function |
-|---------|----------|----------|
-| A | PB8 | Top horizontal |
-| B | PB7 | Top-right vertical |
-| C | PB6 | Bottom-right vertical |
-| D | PB5 | Bottom horizontal |
-| E | PB3 | Bottom-left vertical |
-| F | PA15 | Top-left vertical |
-| G | PA12 | Middle horizontal |
-| DP | PA11 | Decimal point |
+| Position | Location     | Pin  |
+|----------|--------------|------|
+| 0        | Top-left     | PB0  |
+| 1        | Top-right    | PB1  |
+| 2        | Bottom-left  | PB2  |
+| 3        | Bottom-right | PA8  |
 
-**Digit Select (Multiplexing):**
-- PA10 (TOP_LEDS) - Enables top digit
-- PA9 (BOT_LEDS) - Enables bottom digit
+**Segment Pins (Active HIGH, shared across all digits):**
 
-## Quick Start
+| Segment | Function            | Pin  |
+|---------|---------------------|------|
+| A       | Top horizontal      | PB8  |
+| B       | Top-right vertical  | PB7  |
+| C       | Bottom-right vert.  | PB6  |
+| D       | Bottom horizontal   | PB5  |
+| E       | Bottom-left vert.   | PB3  |
+| F       | Top-left vertical   | PA15 |
+| G       | Middle horizontal   | PA12 |
 
-### 1. Simple Number Display
+**Leading "1" anode:** PA11 (HIGH to enable; pull both cathodes in target row LOW to display)
 
-```c
-#include "display_7seg.h"
+See `PIN_MAPPING.md` for full details including PY32-specific BRR register notes.
 
-void main(void) {
-    display_7seg_init();
-    display_7seg_number(42, 5000);  // Show "42" for 5 seconds
-}
+## Usage
+
+Connect a Black Magic Probe (or compatible GDB server) to the target, then:
+
+```bash
+# Display a 2-digit number on the bottom row for 5 seconds
+python3 display_shellcode_generator.py number 42 bottom
+
+# Display arbitrary digits at all 4 positions
+python3 display_shellcode_generator.py digits 1 2 3 4
+
+# Display digits with a leading "1" at a given position (0-3)
+python3 display_shellcode_generator.py leading1 0 2 3
 ```
 
-### 2. Continuous Display (Shellcode)
+The script generates C from the template, compiles it to ARM Thumb binary, injects it into MCU RAM, and sets the PC to execute it.
 
-```c
-#include "display_7seg.h"
+## Requirements
 
-void shellcode_main(void) {
-    display_7seg_init();
-
-    while (1) {
-        // Display "69" continuously
-        display_7seg_digit(6, true, false);   // Top: 6
-        for (volatile uint32_t i = 0; i < 1000; i++);
-
-        display_7seg_digit(9, false, false);  // Bottom: 9
-        for (volatile uint32_t i = 0; i < 1000; i++);
-    }
-}
-```
+- Python 3
+- `arm-none-eabi-gcc` (for ARM Thumb compilation)
+- Black Magic Probe or TCP GDB server (e.g. `localhost:2331`)
 
 ## Files
 
-- `display_7seg.h` - Header file with API declarations
-- `display_7seg.c` - Implementation
-- `example_usage.c` - Complete examples
-- `README.md` - This file
-
-## API Reference
-
-See comments in `display_7seg.h` for full API documentation.
-
-Key functions:
-- `display_7seg_init()` - Initialize GPIO (call first!)
-- `display_7seg_number(num, duration)` - Display 0-99 with multiplexing
-- `display_7seg_digit(digit, pos, dp)` - Display single digit
-- `display_7seg_clear()` - Turn off display
-
-## Examples
-
-See `example_usage.c` for complete working examples.
-
-## Building
-
-```bash
-arm-none-eabi-gcc -mcpu=cortex-m0plus -mthumb -Os \
-    display_7seg.c your_code.c -o output.elf
-```
+| File | Description |
+|------|-------------|
+| `display_shellcode_generator.py` | Main script: generate, compile, inject, run |
+| `display_shellcode_gpio_template.c` | C template compiled into shellcode |
+| `display_shellcode_template.h` | Helper macros and RAM buffer addresses |
+| `pyrsp_py32f003.py` | MCU communication library (GDB RSP) |
+| `inject_only.py` | Inject a pre-compiled `.bin` file |
+| `test_inject_only.py` | Test injection script |
+| `PIN_MAPPING.md` | Detailed pin reference |
 
 ## References
 
-- ../bd0027-decompiled/DISPLAY_ANALYSIS_COMPLETE.md - Full analysis
-- ../DISPLAY_MAPPING_COMPLETE.md - Pin mappings
+- [BD0027 schematic reverse engineering (schlae/VapeRE)](https://github.com/schlae/VapeRE/tree/main/BD0027)

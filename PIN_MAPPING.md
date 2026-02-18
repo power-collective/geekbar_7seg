@@ -111,30 +111,6 @@ delay(5ms);
 // Repeat...
 ```
 
-## Code Reference
-
-See `display_7seg.c` for complete implementation with helper functions:
-
-- `display_7seg_digit(digit, position, decimal_point)` - Show one digit
-- `display_7seg_all_digits(digits[], decimal_points[], duration)` - Multiplex all 4
-- `display_7seg_number(number, duration)` - Show 2-digit number on bottom row
-- `display_leading_one(position, show)` - Control the leading "1"
-
-## Testing
-
-Use these test functions to verify pin mapping:
-
-```c
-// Test digit positions (shows "0123")
-display_7seg_position_test(5000);
-
-// Test leading "1" in all positions
-display_leading_one_test(1000);
-
-// Test all segments on position 2
-display_7seg_segment_test(2);
-```
-
 ## GPIO Configuration
 
 All display pins should be configured as:
